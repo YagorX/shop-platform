@@ -64,9 +64,9 @@ curl "http://127.0.0.1:9200/app-logs-local-*/_count"
 ### 1.3 Скриншоты
 
 1. `screenshots/01-kibana-gateway.png`
-![alt text](image.png)
+![alt text](images/image.png)
 2. `screenshots/02-kibana-catalog.png`
-![alt text](image-1.png)
+![alt text](images/image-1.png)
 
 
 ### 1.4 Результат
@@ -114,9 +114,9 @@ curl "http://127.0.0.1:9090/api/v1/query?query=catalog_service_requests_total"
 
 ### 2.3 Скриншоты
 
-1. ![alt text](image-2.png)
-2. ![alt text](image-3.png)
-3. ![alt text](image-4.png)
+1. ![alt text](images/image-2.png)
+2. ![alt text](images/image-3.png)
+3. ![alt text](images/image-4.png)
 
 ### 2.4 Результат
 
@@ -158,9 +158,9 @@ docker compose start gateway-service
 
 ### 3.3 Скриншоты
 
-![alt text](image-5.png)
+![alt text](images/image-5.png)
 
-![alt text](image-6.png)
+![alt text](images/image-6.png)
 
 
 ---
@@ -198,7 +198,7 @@ docker compose start gateway-service
 ### 4.3 Скриншоты
 
 До нагрузки:
-![alt text](image-7.png)
+![alt text](images/image-7.png)
 
 После:
 
