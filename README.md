@@ -1,4 +1,4 @@
-# shop-platform
+﻿# shop-platform
 
 `shop-platform` — инфраструктурный репозиторий локального observability-стенда для проекта mini-shop.
 

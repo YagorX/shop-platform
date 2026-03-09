@@ -18,10 +18,8 @@ scrape_configs:
     static_configs:
       - targets: ["catalog-service:8081"]
 
-
-  # Add application services later, for example:
-  # - job_name: gateway
-  #   metrics_path: /metrics
-  #   static_configs:
-  #     - targets: ["gateway:8080"]
+  - job_name: 'gateway-service'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['gateway-service:8083']
 
