@@ -166,6 +166,60 @@ services:
       catalog-service:
         condition: service_healthy
 
+  auth-postgres:
+    image: postgres:17-alpine
+    container_name: auth-postgres
+    environment:
+      POSTGRES_DB: authdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5454:5432"
+    volumes:
+      - auth_postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d authdb"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  auth-migrate:
+    image: migrate/migrate:4
+    container_name: auth-migrate
+    depends_on:
+      auth-postgres:
+        condition: service_healthy
+    volumes:
+      - ../../shop-auth/sso/migrations:/migrations:ro
+    command:
+      [
+        "-path", "/migrations",
+        "-database", "postgres://postgres:postgres@auth-postgres:5432/authdb?sslmode=disable",
+        "up"
+      ]
+    restart: "no"
+
+  auth-service:
+    build:
+      context: ../../shop-auth/sso
+      dockerfile: Dockerfile
+    container_name: auth-service
+    ports:
+      - "8082:8082"
+      - "44044:44044"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      jaeger:
+        condition: service_started
+      auth-postgres:
+        condition: service_healthy
+      auth-migrate:
+        condition: service_completed_successfully
 
   postgres:
     image: postgres:17-alpine
@@ -202,3 +256,5 @@ volumes:
   esdata:
   postgres_data:
   redis_data:
+  auth_postgres_data:
+
