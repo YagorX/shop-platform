@@ -18,10 +18,14 @@ scrape_configs:
     static_configs:
       - targets: ["catalog-service:8081"]
 
-  - job_name: 'gateway-service'
+  - job_name: "gateway-service"
+    scheme: https
     metrics_path: /metrics
+    tls_config:
+      insecure_skip_verify: true
     static_configs:
-      - targets: ['gateway-service:8083']
+      - targets: ["gateway-service:8083"]
+
   
   - job_name: 'auth-service'
     metrics_path: /metrics

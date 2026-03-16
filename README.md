@@ -1,18 +1,12 @@
 ﻿# shop-platform
 
-`shop-platform` — инфраструктурный репозиторий локального observability-стенда для проекта mini-shop.
+`shop-platform` — инфраструктурный репозиторий локального стенда для observability и security-проверок всего mini-shop.
 
-Цель:
+Цель репозитория:
 
-1. Поднять локально ELK, Prometheus/Grafana, Jaeger и сервисные зависимости.
-2. Дать единую среду для проверки логов, метрик и трейсов нескольких микросервисов.
-
-## Основные компоненты
-
-1. `deploy/docker-compose.yml` — запуск инфраструктуры и сервисов.
-2. `infra/filebeat/filebeat.yml` — сбор контейнерных логов.
-3. `infra/logstash/pipeline/logstash.conf` — обработка логов и запись в Elasticsearch.
-4. `infra/prometheus/prometheus.yml` — scrape-конфиг метрик.
+1. Поднять единое окружение для `catalog-service`, `auth-service` и `gateway-service`.
+2. Дать воспроизводимый compose-стенд с метриками, логами, трейсами и alerting.
+3. Позволить проверять не только бизнес-функции, но и эксплуатационные сценарии: health/readiness, TLS, mTLS и monitoring.
 
 ## Что поднимается в compose
 
@@ -24,10 +18,29 @@
 6. Prometheus
 7. Grafana
 8. Jaeger
-9. PostgreSQL
-10. Redis
-11. `catalog-service`
-12. `gateway-service` (порт `8083`)
+9. PostgreSQL для catalog
+10. Redis для catalog cache
+11. PostgreSQL для auth
+12. `auth-migrate`
+13. `catalog-service`
+14. `auth-service`
+15. `gateway-service`
+
+## Security model стенда
+
+1. Внешний клиентский вход идет через `shop-gateway` по HTTPS.
+2. `shop-gateway -> shop-auth` использует gRPC mTLS.
+3. `shop-gateway -> shop-catalog-service` использует внутренний gRPC канал.
+4. JWT access token используется для auth flow.
+5. Пароли хранятся как `bcrypt` hash.
+6. Refresh sessions хранят hash refresh token, а не исходное значение.
+
+## Observability model
+
+1. Логи: JSON в stdout -> Filebeat -> Kafka -> Logstash -> Elasticsearch -> Kibana.
+2. Метрики: сервисы отдают `/metrics`, Prometheus их скрейпит, Grafana строит dashboards и alerts.
+3. Трейсы: сервисы экспортируют OTLP в Jaeger.
+4. `gateway-service` скрейпится Prometheus по HTTPS.
 
 ## Быстрый старт
 
@@ -45,57 +58,80 @@ docker compose ps
 
 ## Полезные адреса
 
-1. Gateway: `http://localhost:8083`
+1. Gateway HTTPS: `https://localhost:8083`
 2. Catalog HTTP: `http://localhost:8081`
 3. Catalog gRPC: `localhost:9091`
-4. Prometheus: `http://localhost:9090`
-5. Grafana: `http://localhost:3000`
-6. Kibana: `http://localhost:5601`
-7. Jaeger: `http://localhost:16686`
-8. Elasticsearch: `http://localhost:9200`
+4. Auth HTTP: `http://localhost:8082`
+5. Auth gRPC: `localhost:44044`
+6. Prometheus: `http://localhost:9090`
+7. Grafana: `http://localhost:3000`
+8. Kibana: `http://localhost:5601`
+9. Jaeger: `http://localhost:16686`
+10. Elasticsearch: `http://localhost:9200`
 
-## Проверка логов (ELK)
+## Проверка логов
 
-1. Сервисы пишут JSON-логи в stdout.
-2. Filebeat читает Docker logs и отправляет в Kafka (`logs.v1`).
-3. Logstash читает Kafka и пишет в Elasticsearch (индекс `app-logs-local-*`).
-4. В Kibana создается Data View: `app-logs-local-*`.
+1. Сервисы пишут structured JSON logs в stdout.
+2. Filebeat читает Docker logs и отправляет их в Kafka.
+3. Logstash забирает сообщения из Kafka и пишет в Elasticsearch.
+4. В Kibana можно строить Data View по индексам `app-logs-local-*`.
 
 ## Проверка метрик
 
-1. Сервисы отдают `/metrics`.
-2. Prometheus скрейпит таргеты.
-3. Grafana строит dashboards.
-
-Пример проверок:
+Примеры:
 
 ```bash
-curl http://localhost:8083/metrics
+curl -k https://localhost:8083/metrics
 curl http://localhost:8081/metrics
+curl http://localhost:8082/metrics
 ```
+
+Что важно:
+
+1. `gateway-service` скрейпится Prometheus по `https://gateway-service:8083/metrics`.
+2. Для dev-certificate в Prometheus включен `insecure_skip_verify`.
+3. `catalog-service` и `auth-service` отдают operational HTTP endpoints внутри стенда по HTTP.
 
 ## Проверка трейсов
 
-1. Сервисы экспортируют OTLP в Jaeger.
-2. В Jaeger виден сквозной trace `gateway -> catalog`.
+В Jaeger должны быть видны как минимум две цепочки:
 
-## Health/Readiness практика
+1. `gateway -> catalog`
+2. `gateway -> auth`
 
-1. `/health` — только liveness (процесс жив).
-2. `/ready` — готовность обслуживать трафик с учетом зависимостей.
-3. Для `gateway-service` readiness основан на gRPC health-check `catalog-service`.
+Это позволяет проверить:
 
-Рекомендация для compose:
+1. входящий HTTP span на gateway;
+2. service-level spans;
+3. исходящий gRPC client span;
+4. серверный span во внутреннем сервисе.
 
-1. Добавлять `healthcheck` на `/ready` для прикладных сервисов.
-2. В `depends_on` использовать `condition: service_healthy`, где это возможно.
+## Health / Readiness практика
+
+1. `/health` отвечает только за liveness процесса.
+2. `/ready` отвечает за готовность к реальному трафику.
+3. Для `gateway-service` readiness зависит от двух gRPC health-check:
+   - `catalog-service`
+   - `auth-service`
+4. Для `catalog-service` и `auth-service` readiness показывает готовность собственных зависимостей.
+
+## Базовый protocol smoke-check
+
+1. `curl -k https://localhost:8083/ready`
+2. `curl http://localhost:8081/ready`
+3. `curl http://localhost:8082/ready`
+4. `curl -k https://localhost:8083/products`
+5. `POST https://localhost:8083/auth/register`
+6. `POST https://localhost:8083/auth/login`
 
 ## Для отчета по ДЗ
 
 Минимальный комплект артефактов:
 
-1. Логи из Kibana для 2+ сервисов.
-2. Метрики из Prometheus/Grafana.
-3. Traces из Jaeger.
-4. Скриншоты сработавших alert-правил (email + Telegram).
-5. Текстовый `protocol.md` с шагами и результатами проверок.
+1. Скриншоты healthy compose-стека.
+2. Скриншоты логов из Kibana минимум для двух сервисов.
+3. Скриншоты метрик в Prometheus и dashboard/alert rule в Grafana.
+4. Скриншоты trace chain в Jaeger.
+5. Проверки HTTPS gateway.
+6. Проверки mTLS канала `gateway -> auth-service`.
+7. Текстовый `protocol.md` с шагами, результатами и выводами.
