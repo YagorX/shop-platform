@@ -167,6 +167,9 @@ services:
         condition: service_healthy
       auth-service:
         condition: service_healthy
+      proxy-service:
+        condition: service_healthy
+
 
   auth-postgres:
     image: postgres:17-alpine
@@ -252,6 +255,27 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
+
+  proxy-service:
+    build:
+      context: ../../
+      dockerfile: shop-proxy/Dockerfile
+    container_name: proxy-service
+    ports:
+      - "8085:8085"
+      - "9095:9095"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      catalog-service:
+        condition: service_healthy
+
 
 
 volumes:

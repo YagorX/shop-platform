@@ -4,7 +4,7 @@
 
 Цель репозитория:
 
-1. Поднять единое окружение для `catalog-service`, `auth-service` и `gateway-service`.
+1. Поднять единое окружение для `catalog-service`, `auth-service`, `proxy-service` и `gateway-service`.
 2. Дать воспроизводимый compose-стенд с метриками, логами, трейсами и alerting.
 3. Позволить проверять не только бизнес-функции, но и эксплуатационные сценарии: health/readiness, TLS, mTLS и monitoring.
 
@@ -24,13 +24,14 @@
 12. `auth-migrate`
 13. `catalog-service`
 14. `auth-service`
-15. `gateway-service`
+15. `proxy-service`
+16. `gateway-service`
 
 ## Security model стенда
 
 1. Внешний клиентский вход идет через `shop-gateway` по HTTPS.
 2. `shop-gateway -> shop-auth` использует gRPC mTLS.
-3. `shop-gateway -> shop-catalog-service` использует внутренний gRPC канал.
+3. `shop-gateway -> shop-proxy -> shop-catalog-service` использует внутренний gRPC канал через отдельный proxy-service.
 4. JWT access token используется для auth flow.
 5. Пароли хранятся как `bcrypt` hash.
 6. Refresh sessions хранят hash refresh token, а не исходное значение.
@@ -41,6 +42,7 @@
 2. Метрики: сервисы отдают `/metrics`, Prometheus их скрейпит, Grafana строит dashboards и alerts.
 3. Трейсы: сервисы экспортируют OTLP в Jaeger.
 4. `gateway-service` скрейпится Prometheus по HTTPS.
+5. `proxy-service` скрейпится Prometheus по HTTP и показывает traffic/fault metrics.
 
 ## Быстрый старт
 
@@ -63,11 +65,13 @@ docker compose ps
 3. Catalog gRPC: `localhost:9091`
 4. Auth HTTP: `http://localhost:8082`
 5. Auth gRPC: `localhost:44044`
-6. Prometheus: `http://localhost:9090`
-7. Grafana: `http://localhost:3000`
-8. Kibana: `http://localhost:5601`
-9. Jaeger: `http://localhost:16686`
-10. Elasticsearch: `http://localhost:9200`
+6. Proxy admin/metrics: `http://localhost:8085`
+7. Proxy TCP/gRPC: `localhost:9095`
+8. Prometheus: `http://localhost:9090`
+9. Grafana: `http://localhost:3000`
+10. Kibana: `http://localhost:5601`
+11. Jaeger: `http://localhost:16686`
+12. Elasticsearch: `http://localhost:9200`
 
 ## Проверка логов
 
@@ -84,13 +88,14 @@ docker compose ps
 curl -k https://localhost:8083/metrics
 curl http://localhost:8081/metrics
 curl http://localhost:8082/metrics
+curl http://localhost:8085/metrics
 ```
 
 Что важно:
 
 1. `gateway-service` скрейпится Prometheus по `https://gateway-service:8083/metrics`.
 2. Для dev-certificate в Prometheus включен `insecure_skip_verify`.
-3. `catalog-service` и `auth-service` отдают operational HTTP endpoints внутри стенда по HTTP.
+3. `catalog-service`, `auth-service` и `proxy-service` отдают operational HTTP endpoints внутри стенда по HTTP.
 
 ## Проверка трейсов
 
@@ -118,11 +123,15 @@ curl http://localhost:8082/metrics
 ## Базовый protocol smoke-check
 
 1. `curl -k https://localhost:8083/ready`
-2. `curl http://localhost:8081/ready`
-3. `curl http://localhost:8082/ready`
-4. `curl -k https://localhost:8083/products`
-5. `POST https://localhost:8083/auth/register`
-6. `POST https://localhost:8083/auth/login`
+2. `curl -k https://localhost:8083/status`
+3. `curl -k https://localhost:8083/swagger/`
+4. `curl http://localhost:8081/ready`
+5. `curl http://localhost:8082/ready`
+6. `curl -k https://localhost:8083/products`
+7. `POST https://localhost:8083/auth/register`
+8. `POST https://localhost:8083/auth/login`
+9. `GET https://localhost:8083/products/stream`
+10. `GET http://localhost:8085/admin/state`
 
 ## Для отчета по ДЗ
 
@@ -135,3 +144,4 @@ curl http://localhost:8082/metrics
 5. Проверки HTTPS gateway.
 6. Проверки mTLS канала `gateway -> auth-service`.
 7. Текстовый `protocol.md` с шагами, результатами и выводами.
+8. Скриншоты `/swagger/`, `/status` и `/products/stream`.
