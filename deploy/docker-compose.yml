@@ -1,6 +1,7 @@
-version: "3.9"
+﻿version: "3.9"
 
 services:
+
   kafka:
     image: apache/kafka:3.9.1
     container_name: kafka
@@ -22,8 +23,6 @@ services:
       KAFKA_MIN_INSYNC_REPLICAS: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
 
-
-      
   elasticsearch:
     image: elastic/elasticsearch:8.17.10
     container_name: elasticsearch
@@ -42,7 +41,7 @@ services:
     ulimits:
       nofile:
         soft: 65536
-        hard: 65536 # 9200 port is by default
+        hard: 65536
 
   kibana:
     image: elastic/kibana:8.17.10
@@ -51,7 +50,7 @@ services:
     ports:
       - "5601:5601"
     environment:
-     - ELASTICSEARCH_HOSTS=http://elasticsearch:9200 # kibana is http://localhost:5601/
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
     depends_on:
       - elasticsearch
 
@@ -63,13 +62,13 @@ services:
     depends_on:
       - kafka
       - elasticsearch
-  
+
   filebeat:
     image: elastic/filebeat:8.17.10
     container_name: filebeat
     user: root
     restart: unless-stopped
-    command: [ "--strict.perms=false", "-e", "-d", "publish" ]
+    command: ["--strict.perms=false", "-e", "-d", "publish"]
     volumes:
       - ../infra/filebeat/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
@@ -125,6 +124,269 @@ services:
       - "4317:4317"
       - "4318:4318"
 
+  redis:
+    image: redis:7-alpine
+    container_name: redis
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+
+  etcd1:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: etcd1
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd1
+      - --data-dir=/etcd-data
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://etcd1:2380
+      - --advertise-client-urls=http://etcd1:2379
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=shop-etcd-cluster
+    ports:
+      - "12379:2379"
+    volumes:
+      - etcd1_data:/etcd-data
+
+  etcd2:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: etcd2
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd2
+      - --data-dir=/etcd-data
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://etcd2:2380
+      - --advertise-client-urls=http://etcd2:2379
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=shop-etcd-cluster
+    ports:
+      - "22379:2379"
+    volumes:
+      - etcd2_data:/etcd-data
+
+  etcd3:
+    image: quay.io/coreos/etcd:v3.5.14
+    container_name: etcd3
+    command:
+      - /usr/local/bin/etcd
+      - --name=etcd3
+      - --data-dir=/etcd-data
+      - --listen-peer-urls=http://0.0.0.0:2380
+      - --listen-client-urls=http://0.0.0.0:2379
+      - --initial-advertise-peer-urls=http://etcd3:2380
+      - --advertise-client-urls=http://etcd3:2379
+      - --initial-cluster=etcd1=http://etcd1:2380,etcd2=http://etcd2:2380,etcd3=http://etcd3:2380
+      - --initial-cluster-state=new
+      - --initial-cluster-token=shop-etcd-cluster
+    ports:
+      - "32379:2379"
+    volumes:
+      - etcd3_data:/etcd-data
+
+  patroni1:
+    build:
+      context: ../infra/patroni
+      dockerfile: Dockerfile
+    container_name: patroni1
+    hostname: patroni1
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    volumes:
+      - ../infra/patroni/patroni1.yml:/etc/patroni/patroni.yml:ro
+      - patroni1_data:/var/lib/postgresql/data
+    ports:
+      - "15432:5432"
+      - "18008:8008"
+
+  patroni2:
+    build:
+      context: ../infra/patroni
+      dockerfile: Dockerfile
+    container_name: patroni2
+    hostname: patroni2
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    volumes:
+      - ../infra/patroni/patroni2.yml:/etc/patroni/patroni.yml:ro
+      - patroni2_data:/var/lib/postgresql/data
+    ports:
+      - "25432:5432"
+      - "28008:8008"
+
+  patroni3:
+    build:
+      context: ../infra/patroni
+      dockerfile: Dockerfile
+    container_name: patroni3
+    hostname: patroni3
+    environment:
+      PGDATA: /var/lib/postgresql/data
+    depends_on:
+      - etcd1
+      - etcd2
+      - etcd3
+    volumes:
+      - ../infra/patroni/patroni3.yml:/etc/patroni/patroni.yml:ro
+      - patroni3_data:/var/lib/postgresql/data
+    ports:
+      - "35432:5432"
+      - "38008:8008"
+
+  postgres-haproxy:
+    image: haproxy:2.9-alpine
+    container_name: postgres-haproxy
+    depends_on:
+      - patroni1
+      - patroni2
+      - patroni3
+    ports:
+      - "5432:5432"
+    volumes:
+      - ../infra/haproxy/postgres-haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+
+  mongo1:
+    image: mongo:7
+    container_name: mongo1
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo1_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping').ok", "--quiet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  mongo2:
+    image: mongo:7
+    container_name: mongo2
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27018:27017"
+    volumes:
+      - mongo2_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping').ok", "--quiet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  mongo3:
+    image: mongo:7
+    container_name: mongo3
+    command: ["--replSet", "rs0", "--bind_ip_all"]
+    ports:
+      - "27019:27017"
+    volumes:
+      - mongo3_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping').ok", "--quiet"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
+
+  mongo-init:
+    image: mongo:7
+    container_name: mongo-init
+    restart: "no"
+    depends_on:
+      mongo1:
+        condition: service_healthy
+      mongo2:
+        condition: service_healthy
+      mongo3:
+        condition: service_healthy
+    entrypoint: >
+      mongosh --host mongo1:27017 --eval '
+        rs.initiate({
+          _id: "rs0",
+          members: [
+            { _id: 0, host: "mongo1:27017", priority: 2 },
+            { _id: 1, host: "mongo2:27017", priority: 1 },
+            { _id: 2, host: "mongo3:27017", priority: 1 }
+          ]
+        })
+      '
+
+  auth-migrate:
+    image: migrate/migrate:4
+    container_name: auth-migrate
+    depends_on:
+      postgres-haproxy:
+        condition: service_started
+    volumes:
+      - ../../shop-auth/sso/migrations:/migrations:ro
+    command:
+      [
+        "-path", "/migrations",
+        "-database", "postgres://postgres:postgres@postgres-haproxy:5432/authdb?sslmode=disable",
+        "up"
+      ]
+    restart: "no"
+
+  catalog-migrate:
+    image: migrate/migrate:4
+    container_name: catalog-migrate
+    depends_on:
+      postgres-haproxy:
+        condition: service_started
+    volumes:
+      - ../../shop-catalog-service/migrations:/migrations:ro
+    command:
+      [
+        "-path", "/migrations",
+        "-database", "postgres://catalog_user:catalog_password@postgres-haproxy:5432/catalog?sslmode=disable",
+        "up"
+      ]
+    restart: "no"
+
+  auth-service:
+    build:
+      context: ../../shop-auth/sso
+      dockerfile: Dockerfile
+    container_name: auth-service
+    ports:
+      - "8082:8082"
+      - "44044:44044"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      jaeger:
+        condition: service_started
+      postgres-haproxy:
+        condition: service_started
+      auth-migrate:
+        condition: service_completed_successfully
+
   catalog-service:
     build:
       context: ../../shop-catalog-service
@@ -142,9 +404,51 @@ services:
     depends_on:
       jaeger:
         condition: service_started
-      postgres:
-        condition: service_healthy
+      postgres-haproxy:
+        condition: service_started
+      catalog-migrate:
+        condition: service_completed_successfully
       redis:
+        condition: service_healthy
+
+  cart-service:
+    build:
+      context: ../../shop-cart-service
+      dockerfile: Dockerfile
+    container_name: cart-service
+    ports:
+      - "8084:8084"
+      - "19092:9092"   # хост 19092, т.к. 9092 занят Kafka
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8084/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    depends_on:
+      jaeger:
+        condition: service_started
+      mongo-init:
+        condition: service_completed_successfully
+
+  proxy-service:
+    build:
+      context: ../../
+      dockerfile: shop-proxy/Dockerfile
+    container_name: proxy-service
+    ports:
+      - "8085:8085"
+      - "9095:9095"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    depends_on:
+      auth-service:
+        condition: service_healthy
+      catalog-service:
         condition: service_healthy
 
   gateway-service:
@@ -170,117 +474,15 @@ services:
       proxy-service:
         condition: service_healthy
 
-
-  auth-postgres:
-    image: postgres:17-alpine
-    container_name: auth-postgres
-    environment:
-      POSTGRES_DB: authdb
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5454:5432"
-    volumes:
-      - auth_postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d authdb"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  auth-migrate:
-    image: migrate/migrate:4
-    container_name: auth-migrate
-    depends_on:
-      auth-postgres:
-        condition: service_healthy
-    volumes:
-      - ../../shop-auth/sso/migrations:/migrations:ro
-    command:
-      [
-        "-path", "/migrations",
-        "-database", "postgres://postgres:postgres@auth-postgres:5432/authdb?sslmode=disable",
-        "up"
-      ]
-    restart: "no"
-
-  auth-service:
-    build:
-      context: ../../shop-auth/sso
-      dockerfile: Dockerfile
-    container_name: auth-service
-    ports:
-      - "8082:8082"
-      - "44044:44044"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8082/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 20s
-    depends_on:
-      jaeger:
-        condition: service_started
-      auth-postgres:
-        condition: service_healthy
-      auth-migrate:
-        condition: service_completed_successfully
-
-  postgres:
-    image: postgres:17-alpine
-    container_name: postgres
-    environment:
-      POSTGRES_DB: catalog
-      POSTGRES_USER: catalog
-      POSTGRES_PASSWORD: catalog
-    ports:
-      - "5433:5432"
-    volumes:
-      - postgres_data:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U catalog -d catalog"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  redis:
-    image: redis:7-alpine
-    container_name: redis
-    ports:
-      - "6379:6379"
-    volumes:
-      - redis_data:/data
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  proxy-service:
-    build:
-      context: ../../
-      dockerfile: shop-proxy/Dockerfile
-    container_name: proxy-service
-    ports:
-      - "8085:8085"
-      - "9095:9095"
-    healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8085/ready || exit 1"]
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-    depends_on:
-      auth-service:
-        condition: service_healthy
-      catalog-service:
-        condition: service_healthy
-
-
-
 volumes:
   esdata:
-  postgres_data:
   redis_data:
-  auth_postgres_data:
-
+  etcd1_data:
+  etcd2_data:
+  etcd3_data:
+  patroni1_data:
+  patroni2_data:
+  patroni3_data:
+  mongo1_data:
+  mongo2_data:
+  mongo3_data:
