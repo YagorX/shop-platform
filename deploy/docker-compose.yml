@@ -323,14 +323,20 @@ services:
         condition: service_healthy
     entrypoint: >
       mongosh --host mongo1:27017 --eval '
-        rs.initiate({
-          _id: "rs0",
-          members: [
-            { _id: 0, host: "mongo1:27017", priority: 2 },
-            { _id: 1, host: "mongo2:27017", priority: 1 },
-            { _id: 2, host: "mongo3:27017", priority: 1 }
-          ]
-        })
+        var status = rs.status();
+        if (status.ok === 1) {
+          print("Replica set already initialized, skipping.");
+        } else {
+          rs.initiate({
+            _id: "rs0",
+            members: [
+              { _id: 0, host: "mongo1:27017", priority: 2 },
+              { _id: 1, host: "mongo2:27017", priority: 1 },
+              { _id: 2, host: "mongo3:27017", priority: 1 }
+            ]
+          });
+          print("Replica set initialized.");
+        }
       '
 
   auth-migrate:
@@ -416,6 +422,7 @@ services:
       context: ../../shop-cart-service
       dockerfile: Dockerfile
     container_name: cart-service
+    restart: on-failure
     ports:
       - "8084:8084"
       - "19092:9092"   # хост 19092, т.к. 9092 занят Kafka
@@ -428,6 +435,8 @@ services:
     depends_on:
       jaeger:
         condition: service_started
+      redis:
+        condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
 
@@ -436,6 +445,7 @@ services:
       context: ../../
       dockerfile: shop-proxy/Dockerfile
     container_name: proxy-service
+    restart: on-failure
     ports:
       - "8085:8085"
       - "9095:9095"
@@ -456,6 +466,7 @@ services:
       context: ../../shop-gateway
       dockerfile: Dockerfile
     container_name: gateway-service
+    restart: on-failure
     ports:
       - "8083:8083"
     healthcheck:
@@ -467,11 +478,15 @@ services:
     depends_on:
       jaeger:
         condition: service_started
+      redis:
+        condition: service_healthy
       catalog-service:
         condition: service_healthy
       auth-service:
         condition: service_healthy
       proxy-service:
+        condition: service_healthy
+      cart-service:
         condition: service_healthy
 
 volumes:
