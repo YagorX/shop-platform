@@ -353,7 +353,9 @@ services:
         "-database", "postgres://postgres:postgres@postgres-haproxy:5432/authdb?sslmode=disable",
         "up"
       ]
-    restart: "no"
+    # Patroni может ещё не выбрать leader к моменту старта мигратора.
+    # При EOF контейнер падает → docker автоматически перезапускает до 20 раз.
+    restart: on-failure:20
 
   catalog-migrate:
     image: migrate/migrate:4
@@ -369,7 +371,9 @@ services:
         "-database", "postgres://catalog_user:catalog_password@postgres-haproxy:5432/catalog?sslmode=disable",
         "up"
       ]
-    restart: "no"
+    # Patroni может ещё не выбрать leader к моменту старта мигратора.
+    # При EOF контейнер падает → docker автоматически перезапускает до 20 раз.
+    restart: on-failure:20
 
   auth-service:
     build:
