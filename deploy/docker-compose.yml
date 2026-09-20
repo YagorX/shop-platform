@@ -1,6 +1,6 @@
-﻿version: "3.9"
-
 services:
+
+  # ==================== KAFKA ====================
 
   kafka:
     image: apache/kafka:3.9.1
@@ -22,6 +22,26 @@ services:
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_MIN_INSYNC_REPLICAS: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    healthcheck:
+      test: ["CMD-SHELL", "kafka-broker-api-versions.sh --bootstrap-server localhost:9092 || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 15
+      start_period: 40s
+
+  kafka-ui:
+    image: provectuslabs/kafka-ui:latest
+    container_name: kafka-ui
+    ports:
+      - "8090:8080"
+    environment:
+      KAFKA_CLUSTERS_0_NAME: shop-platform
+      KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:9092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  # ==================== ELASTICSEARCH STACK ====================
 
   elasticsearch:
     image: elastic/elasticsearch:8.17.10
@@ -60,8 +80,10 @@ services:
     volumes:
       - ../infra/logstash/pipeline/logstash.conf:/usr/share/logstash/pipeline/logstash.conf:ro
     depends_on:
-      - kafka
-      - elasticsearch
+      kafka:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_started
 
   filebeat:
     image: elastic/filebeat:8.17.10
@@ -74,7 +96,10 @@ services:
       - /var/lib/docker/containers:/var/lib/docker/containers:ro
       - /var/run/docker.sock:/var/run/docker.sock:ro
     depends_on:
-      - kafka
+      kafka:
+        condition: service_healthy
+
+  # ==================== OBSERVABILITY ====================
 
   prometheus:
     image: prom/prometheus:v3.5.0
@@ -124,6 +149,8 @@ services:
       - "4317:4317"
       - "4318:4318"
 
+  # ==================== STORAGE ====================
+
   redis:
     image: redis:7-alpine
     container_name: redis
@@ -142,8 +169,8 @@ services:
     container_name: rabbitmq
     hostname: rabbitmq
     ports:
-      - "5672:5672"   # AMQP — сюда коннектится твой Go-клиент
-      - "15672:15672" # Management UI — http://localhost:15672 (guest/guest)
+      - "5672:5672"
+      - "15672:15672"
     environment:
       RABBITMQ_DEFAULT_USER: guest
       RABBITMQ_DEFAULT_PASS: guest
@@ -161,9 +188,11 @@ services:
     image: mailhog/mailhog:latest
     container_name: mailhog
     ports:
-      - "1025:1025" # SMTP — сюда notification-service шлёт письма
-      - "8025:8025" # Web UI — http://localhost:8025
+      - "1025:1025"
+      - "8025:8025"
     restart: unless-stopped
+
+  # ==================== ETCD ====================
 
   etcd1:
     image: quay.io/coreos/etcd:v3.5.14
@@ -221,6 +250,8 @@ services:
       - "32379:2379"
     volumes:
       - etcd3_data:/etcd-data
+
+  # ==================== POSTGRES HA (PATRONI) ====================
 
   patroni1:
     build:
@@ -291,6 +322,7 @@ services:
     volumes:
       - ../infra/haproxy/postgres-haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
 
+  # ==================== MONGODB REPLICA SET ====================
 
   mongo1:
     image: mongo:7
@@ -350,10 +382,10 @@ services:
         condition: service_healthy
     entrypoint: >
       mongosh --host mongo1:27017 --eval '
-        var status = rs.status();
-        if (status.ok === 1) {
+        try {
+          rs.status();
           print("Replica set already initialized, skipping.");
-        } else {
+        } catch (e) {
           rs.initiate({
             _id: "rs0",
             members: [
@@ -366,28 +398,55 @@ services:
         }
       '
 
+  # ==================== MIGRATIONS ====================
+
+  # Провижининг БД и ролей до миграций схемы (создаёт authdb, catalog, catalog_user).
+  # Patroni не сидит app-базы сам, поэтому делаем это отдельным идемпотентным шагом.
+  postgres-init:
+    image: postgres:17-alpine
+    container_name: postgres-init
+    depends_on:
+      postgres-haproxy:
+        condition: service_started
+    environment:
+      PGPASSWORD: postgres
+    volumes:
+      - ../infra/postgres/init.sql:/init.sql:ro
+    entrypoint:
+      - sh
+      - -c
+      - |
+        until psql -h postgres-haproxy -U postgres -c 'SELECT 1' >/dev/null 2>&1; do
+          echo 'postgres-init: waiting for postgres primary...'; sleep 2;
+        done
+        psql -h postgres-haproxy -U postgres -v ON_ERROR_STOP=1 -f /init.sql
+        echo 'postgres-init: done'
+    restart: on-failure:20
+
   auth-migrate:
     image: migrate/migrate:4
     container_name: auth-migrate
     depends_on:
+      postgres-init:
+        condition: service_completed_successfully
       postgres-haproxy:
         condition: service_started
     volumes:
-      - ../../shop-auth/sso/migrations:/migrations:ro
+      - ../../shop-auth/migrations:/migrations:ro
     command:
       [
         "-path", "/migrations",
         "-database", "postgres://postgres:postgres@postgres-haproxy:5432/authdb?sslmode=disable",
         "up"
       ]
-    # Patroni может ещё не выбрать leader к моменту старта мигратора.
-    # При EOF контейнер падает → docker автоматически перезапускает до 20 раз.
     restart: on-failure:20
 
   catalog-migrate:
     image: migrate/migrate:4
     container_name: catalog-migrate
     depends_on:
+      postgres-init:
+        condition: service_completed_successfully
       postgres-haproxy:
         condition: service_started
     volumes:
@@ -398,13 +457,13 @@ services:
         "-database", "postgres://catalog_user:catalog_password@postgres-haproxy:5432/catalog?sslmode=disable",
         "up"
       ]
-    # Patroni может ещё не выбрать leader к моменту старта мигратора.
-    # При EOF контейнер падает → docker автоматически перезапускает до 20 раз.
     restart: on-failure:20
+
+  # ==================== APPLICATION SERVICES ====================
 
   auth-service:
     build:
-      context: ../../shop-auth/sso
+      context: ../../shop-auth
       dockerfile: Dockerfile
     container_name: auth-service
     ports:
@@ -425,11 +484,13 @@ services:
         condition: service_completed_successfully
       rabbitmq:
         condition: service_healthy
+    volumes:
+      - ../infra/certs:/app/certs:ro
 
   catalog-service:
     build:
-      context: ../../shop-catalog-service
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: shop-catalog-service/Dockerfile
     container_name: catalog-service
     ports:
       - "8081:8081"
@@ -449,16 +510,18 @@ services:
         condition: service_completed_successfully
       redis:
         condition: service_healthy
+    volumes:
+      - ../infra/certs:/app/certs:ro
 
   cart-service:
     build:
-      context: ../../shop-cart-service
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: shop-cart/Dockerfile
     container_name: cart-service
     restart: on-failure
     ports:
       - "8084:8084"
-      - "19092:9092"   # хост 19092, т.к. 9092 занят Kafka
+      - "19092:9092"
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://localhost:8084/ready || exit 1"]
       interval: 10s
@@ -472,6 +535,8 @@ services:
         condition: service_healthy
       mongo-init:
         condition: service_completed_successfully
+    volumes:
+      - ../infra/certs:/app/certs:ro
 
   proxy-service:
     build:
@@ -493,11 +558,13 @@ services:
         condition: service_healthy
       catalog-service:
         condition: service_healthy
+    volumes:
+      - ../infra/certs:/app/certs:ro
 
   gateway-service:
     build:
-      context: ../../shop-gateway
-      dockerfile: Dockerfile
+      context: ../../
+      dockerfile: shop-gateway-service/Dockerfile
     container_name: gateway-service
     restart: on-failure
     ports:
@@ -521,10 +588,12 @@ services:
         condition: service_healthy
       cart-service:
         condition: service_healthy
+    volumes:
+      - ../infra/certs:/app/certs:ro
 
   notification-service:
     build:
-      context: ../../shop-notification-service
+      context: ../../shop-notification
       dockerfile: Dockerfile
     container_name: notification-service
     restart: on-failure
@@ -546,7 +615,7 @@ services:
 
   search-service:
     build:
-      context: ../../shop-search-service
+      context: ../../shop-search
       dockerfile: Dockerfile
     container_name: search-service
     restart: on-failure
@@ -562,7 +631,7 @@ services:
       elasticsearch:
         condition: service_started
       kafka:
-        condition: service_started
+        condition: service_healthy
 
 volumes:
   esdata:

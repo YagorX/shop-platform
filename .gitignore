@@ -1,1 +1,9 @@
 /bugs
+# Приватные ключи и сертификаты: генерируются локально через infra/certs/gen-certs.sh
+*.key
+*.pem
+*.p12
+*.pfx
+*.csr
+*.srl
+*.crt
