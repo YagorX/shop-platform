@@ -333,8 +333,15 @@ Prometheus скрейпит `/metrics` каждого сервиса. Конфи
 `auth-service:8082` | HTTP |
 `proxy-service:8085` | HTTP |
 `gateway-service:8083` | **HTTPS** с `insecure_skip_verify` |
+`host.docker.internal:8082` (job `auth-local`) | HTTP, только для соло-прогонов |
 
 Gateway — единственный таргет по HTTPS, поскольку наружу он работает только по TLS. `insecure_skip_verify` нужен из-за самоподписанного CA; корректнее было бы дать Prometheus `ca_file`.
+
+Job `auth-local` — для нагрузочных прогонов, когда auth запущен бинарём на хосте, а не в compose. Чтобы контейнер Prometheus мог достать хост, в compose ему добавлены `extra_hosts` с `host.docker.internal:host-gateway`: на Linux этого имени по умолчанию нет. Там же включён `--web.enable-remote-write-receiver` — k6 нельзя скрести, он пишет свои метрики сам.
+
+### Дашборды
+
+Grafana настраивается файлами: источник данных и дашборды лежат в [`infra/grafana`](infra/grafana/README.md) и подхватываются при старте. Дашборд «Auth — нагрузка и точки отказа» рассчитан на прогоны из [`shop-auth/load`](../shop-auth/load/README.md).
 
 Пространства имён метрик: `auth_*`, `catalog_*`, `gateway_*`, `cart_*`, `proxy_*`, `notification_*`, `search_*`.
 

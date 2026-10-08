@@ -37,3 +37,10 @@ scrape_configs:
     static_configs:
       - targets: ['proxy-service:8085']
 
+  # Соло-режим нагрузочных прогонов: auth запущен бинарём на хосте, а не в compose.
+  # В режиме полного стенда эта цель будет down — это ожидаемо.
+  - job_name: 'auth-local'
+    metrics_path: /metrics
+    static_configs:
+      - targets: ['host.docker.internal:8082']
+

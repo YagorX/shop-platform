@@ -108,8 +108,14 @@ services:
       - "9090:9090"
     volumes:
       - ../infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    # На Linux имени host.docker.internal нет по умолчанию: добавляем его вручную,
+    # чтобы Prometheus мог скрести сервис, запущенный бинарём на хосте (job auth-local).
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     command:
       - '--config.file=/etc/prometheus/prometheus.yml'
+      # k6 скрести нельзя — он живёт пару минут и пишет метрики сам, через remote write.
+      - '--web.enable-remote-write-receiver'
     depends_on:
       - node-exporter
 
@@ -138,6 +144,10 @@ services:
       GF_SMTP_PASSWORD: "xxx"
       GF_SMTP_FROM_ADDRESS: ""
       GF_SERVER_ROOT_URL: "http://localhost:3000"
+    volumes:
+      # Источник данных и список дашбордов подхватываются при старте — кликать в UI не нужно.
+      - ../infra/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ../infra/grafana/dashboards:/var/lib/grafana/dashboards:ro
     depends_on:
       - prometheus
 
