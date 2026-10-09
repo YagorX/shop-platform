@@ -60,7 +60,7 @@
       },
       "options": {
         "mode": "markdown",
-        "content": "### Как читать\n\nКолено — первая ступень нагрузки, где **одновременно**: p99 вырос непропорционально, фактический rps отстал от заданного (ряд k6), и в ряду «Ресурсы» что-то встало в потолок.\nОшибки (`DeadlineExceeded`, `ResourceExhausted`) приходят уже **после** колена — если ждать их, оптимизировать будет поздно.\n\nГлавный сигнал по пулу — **`go_sql_wait_count_total`**: запросы, которым не досталось соединения. Пока он ноль, упирается не база."
+        "content": "### Как читать\n\nКолено — первая ступень нагрузки, где **одновременно**: p99 вырос непропорционально, фактический rps отстал от заданного (ряд k6), и в ряду «Ресурсы» что-то встало в потолок.\nОшибки (`DeadlineExceeded`, `ResourceExhausted`) приходят уже **после** колена — если ждать их, оптимизировать будет поздно.\n\nГлавный сигнал по пулу — **`go_sql_wait_count_total`**: запросы, которым не досталось соединения. Пока он ноль, упирается не база.\n\nПерегрузку логина ограничивает семафор на bcrypt: смотри ряд **«Защита bcrypt»** — слоты на потолке, ожидание у `max_wait`, рост `ResourceExhausted`. Validate при этом должен оставаться в миллисекундах."
       }
     },
     {
@@ -438,7 +438,7 @@
       "id": 7,
       "type": "timeseries",
       "title": "bcrypt: p99 по операциям",
-      "description": "compare — проверка пароля в Login, hash — выпуск в Register. Рост означает нехватку CPU: сам bcrypt от нагрузки не замедляется.",
+      "description": "compare — проверка пароля в Login, hash — выпуск в Register. Это время самого bcrypt внутри слота семафора: с семафором оно держится ровно даже при перегрузке, очередь видна в ряду «Защита bcrypt».",
       "datasource": {
         "type": "prometheus",
         "uid": "prometheus"
@@ -635,6 +635,365 @@
       ]
     },
     {
+      "id": 20,
+      "type": "row",
+      "title": "Защита bcrypt: семафор",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "id": 21,
+      "type": "timeseries",
+      "title": "Слоты bcrypt: занято из всего",
+      "description": "«занято» держится на уровне «всего» — семафор работает на потолке, лишние ждут слот или получают отказ. Gauge — мгновенный снимок раз в scrape, а не среднее: короткие всплески между снимками не видны.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "short"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "всего"
+            },
+            "properties": [
+              {
+                "id": "custom.lineStyle",
+                "value": {
+                  "fill": "dash",
+                  "dash": [
+                    10,
+                    10
+                  ]
+                }
+              },
+              {
+                "id": "custom.fillOpacity",
+                "value": 0
+              },
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "red"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "auth_password_hash_inflight{job=\"$job\"}",
+          "legendFormat": "занято",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "auth_password_hash_slots{job=\"$job\"}",
+          "legendFormat": "всего",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 22,
+      "type": "timeseries",
+      "title": "Ожидание слота: p50 / p99",
+      "description": "p99 у потолка max_wait (150 мс) — очередь не рассасывается, дальше отказы. Около нуля — слоты свободны и семафор ничего не стоит. bcrypt p99 при этом держится ровно: очередь видна здесь, а не там.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.5, sum by (le) (rate(auth_password_hash_wait_seconds_bucket{job=\"$job\"}[$__rate_interval])))",
+          "legendFormat": "p50",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "histogram_quantile(0.99, sum by (le) (rate(auth_password_hash_wait_seconds_bucket{job=\"$job\"}[$__rate_interval])))",
+          "legendFormat": "p99",
+          "range": true
+        }
+      ]
+    },
+    {
+      "id": 23,
+      "type": "timeseries",
+      "title": "Login и Register: пропущено и отказано",
+      "description": "OK упирается в плато (слоты / 0.036 с ≈ 165 rps при 6 слотах), всё сверх него — ResourceExhausted. Отказ вместо ожидания — это и есть результат семафора: validate в это время не страдает.",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "axisPlacement": "auto",
+            "drawStyle": "line",
+            "fillOpacity": 10,
+            "gradientMode": "none",
+            "lineInterpolation": "linear",
+            "lineWidth": 1,
+            "pointSize": 5,
+            "showPoints": "never",
+            "spanNulls": false,
+            "scaleDistribution": {
+              "type": "linear"
+            },
+            "stacking": {
+              "group": "A",
+              "mode": "none"
+            },
+            "hideFrom": {
+              "legend": false,
+              "tooltip": false,
+              "viz": false
+            },
+            "thresholdsStyle": {
+              "mode": "off"
+            }
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "green",
+                "value": null
+              }
+            ]
+          },
+          "unit": "reqps"
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byRegexp",
+              "options": ".* отказ"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "mode": "fixed",
+                  "fixedColor": "orange"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "options": {
+        "legend": {
+          "calcs": [
+            "lastNotNull",
+            "max"
+          ],
+          "displayMode": "table",
+          "placement": "bottom",
+          "showLegend": true
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(sum by (method) (rate(auth_grpc_requests_total{job=\"$job\", method=~\".*/(Login|Register)\", code=\"OK\"}[$__rate_interval])), \"method\", \"$1\", \"method\", \".*/(.*)\")",
+          "legendFormat": "{{method}} OK",
+          "range": true
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "editorMode": "code",
+          "expr": "label_replace(sum by (method) (rate(auth_grpc_requests_total{job=\"$job\", method=~\".*/(Login|Register)\", code=\"ResourceExhausted\"}[$__rate_interval])), \"method\", \"$1\", \"method\", \".*/(.*)\")",
+          "legendFormat": "{{method}} отказ",
+          "range": true
+        }
+      ]
+    },
+    {
       "id": 9,
       "type": "row",
       "title": "Ресурсы: почему упёрлось",
@@ -643,7 +1002,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 21
+        "y": 30
       },
       "panels": []
     },
@@ -660,7 +1019,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 22
+        "y": 31
       },
       "fieldConfig": {
         "defaults": {
@@ -771,7 +1130,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 22
+        "y": 31
       },
       "fieldConfig": {
         "defaults": {
@@ -871,7 +1230,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 22
+        "y": 31
       },
       "fieldConfig": {
         "defaults": {
@@ -961,7 +1320,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 30
+        "y": 39
       },
       "fieldConfig": {
         "defaults": {
@@ -1050,7 +1409,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 30
+        "y": 39
       },
       "fieldConfig": {
         "defaults": {
@@ -1139,7 +1498,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 30
+        "y": 39
       },
       "fieldConfig": {
         "defaults": {
@@ -1246,7 +1605,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 38
+        "y": 47
       },
       "panels": []
     },
@@ -1263,7 +1622,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 39
+        "y": 48
       },
       "fieldConfig": {
         "defaults": {
@@ -1363,7 +1722,7 @@
         "h": 8,
         "w": 6,
         "x": 12,
-        "y": 39
+        "y": 48
       },
       "fieldConfig": {
         "defaults": {
@@ -1452,7 +1811,7 @@
         "h": 8,
         "w": 6,
         "x": 18,
-        "y": 39
+        "y": 48
       },
       "fieldConfig": {
         "defaults": {
